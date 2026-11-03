@@ -16,15 +16,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Download repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Detect Java Version
-        id: detect-java
+      # 2. Detect Java and Gradle versions
+      - name: Detect Build Versions
+        id: versions
         shell: bash
         run: |
           python3 - <<'PY'
           import re
+          import os
           from pathlib import Path
 
           files = [
@@ -33,51 +36,77 @@ jobs:
           ]
 
           content = "\n".join(
-              p.read_text() for p in files if p.exists()
+              p.read_text(errors="ignore")
+              for p in files if p.exists()
           )
 
-          patterns = [
+          java_patterns = [
               r'JavaLanguageVersion\.of\(\s*(\d+)\s*\)',
               r'jvmToolchain\(\s*(\d+)\s*\)',
               r'VERSION_(\d+)',
+              r'JavaVersion\.toVersion\(["\'](\d+)'
           ]
 
-          version = None
+          java = "21"
 
-          for pattern in patterns:
+          for pattern in java_patterns:
               match = re.search(pattern, content)
               if match:
-                  version = match.group(1)
+                  java = match.group(1)
                   break
 
-          if not version:
-              version = "21"
+          gradle = "8.14.3"
+          wrapper = Path("gradle/wrapper/gradle-wrapper.properties")
 
-          with open(
-              __import__("os").environ["GITHUB_OUTPUT"], "a"
-          ) as output:
-              output.write(f"version={version}\n")
+          if wrapper.exists():
+              match = re.search(
+                  r'gradle-(\d+(?:\.\d+)+)(?:-[^/]*)?\.zip',
+                  wrapper.read_text(errors="ignore")
+              )
+              if match:
+                  gradle = match.group(1)
 
-          print(f"Detected Java version: {version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"java={java}\n")
+              output.write(f"gradle={gradle}\n")
+
+          print(f"Java version: {java}")
+          print(f"Gradle version: {gradle}")
           PY
 
+      # 3. Install Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ steps.detect-java.outputs.version }}
+          java-version: ${{ steps.versions.outputs.java }}
+          cache: gradle
 
+      # 4. Install and configure Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ steps.versions.outputs.gradle }}
 
+      # 5. Build plugin (wrapper or installed Gradle)
       - name: Build Plugin
+        shell: bash
         run: |
-          chmod +x gradlew
-          ./gradlew clean build
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew clean build
+          else
+            echo "Gradle Wrapper not found."
+            echo "Using installed Gradle instead."
+            gradle clean build
+          fi
 
+      # 6. Upload compiled plugin
       - name: Upload Plugin JAR
         uses: actions/upload-artifact@v4
         with:
           name: Minecraft-Plugin
-          path: build/libs/*.jar
+          path: |
+            **/build/libs/*.jar
           if-no-files-found: error
+          retention-days: 30
