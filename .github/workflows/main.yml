@@ -1,0 +1,83 @@
+
+name: Minecraft Plugin CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Detect Java Version
+        id: detect-java
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          files = [
+              Path("build.gradle"),
+              Path("build.gradle.kts")
+          ]
+
+          content = "\n".join(
+              p.read_text() for p in files if p.exists()
+          )
+
+          patterns = [
+              r'JavaLanguageVersion\.of\(\s*(\d+)\s*\)',
+              r'jvmToolchain\(\s*(\d+)\s*\)',
+              r'VERSION_(\d+)',
+          ]
+
+          version = None
+
+          for pattern in patterns:
+              match = re.search(pattern, content)
+              if match:
+                  version = match.group(1)
+                  break
+
+          if not version:
+              version = "21"
+
+          with open(
+              __import__("os").environ["GITHUB_OUTPUT"], "a"
+          ) as output:
+              output.write(f"version={version}\n")
+
+          print(f"Detected Java version: {version}")
+          PY
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.detect-java.outputs.version }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Plugin
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build
+
+      - name: Upload Plugin JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: Minecraft-Plugin
+          path: build/libs/*.jar
+          if-no-files-found: error
